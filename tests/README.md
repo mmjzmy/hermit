@@ -41,8 +41,10 @@ models), `toy_task.py` (the toy task the Trainer tests run on), `claude_stand.py
 `fixtures/claude_streams/`, and the probe for a working bubblewrap, for core's and the methods' Claude tests),
 `pi_stand.py` (the stand-in `pi` that replays `fixtures/pi/`, for the methods' Pi tests),
 `fixtures/` (`pi/`: Pi's recorded streams, read by `core/test_pi_agent.py` and `pi_stand.py`; `opencode/`: OpenCode's,
-read by `core/test_opencode_agent.py`; `dsh/`: DeepSeek Harness's, read by `core/test_dsh_agent.py`; the recorded
-streams are also read as a Harbor trial's by `core/test_trajectory.py` and the harness2 and rrsi_adapter tests).
+read by `core/test_opencode_agent.py`; `dsh/`: DeepSeek Harness's, read by `core/test_dsh_agent.py`; `codex/`:
+Codex's, in the shapes of a recorded one, read by `core/test_base_agents.py`, `core/test_cli_agent.py` and
+`core/test_harbor_runner.py`; the recorded streams are also read as a Harbor trial's by `core/test_trajectory.py`
+and the harness2 and rrsi_adapter tests).
 
 A new or changed test follows the [test checklist](../.agents/skills/prepare-pr/references/test-checklist.md): where it
 goes, how it is named and documented, what it asserts, and what it may touch.
