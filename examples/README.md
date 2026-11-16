@@ -36,6 +36,116 @@ a `.hermit/CARD.md`.
 | [`aspire_robosuite/`](aspire_robosuite/) | The Robosuite tasks of ASPIRE's Code-as-Policy harness: development and held-out seeds, task success | Codex with ASPIRE's fix-loop subagent and verifier prompts (`utils/agent/task.py`), GLM 5.3 Flash, ASPIRE's robot execution engine in its own venv through `bin/sim` | [`aspire`](aspire_robosuite/aspire/) |
 | [`agentdyn/`](agentdyn/) | AgentDyn's frozen benign and injected cases (Shopping, GitHub, DailyLife), clean utility and attack success rate | `bridge.py:run`: AgentDyn's native agent loop, with the defense bundle's hooks around every tool call | [`evosafe`](agentdyn/evosafe/) (EvoSafeHarness) |
 
+## Harbor benchmarks
+
+Five benchmarks of Harbor's registry, each with a baseline and the method whose paper's protocol fits it, packaged so
+that any of their runs can be handed to someone with a Docker host. Each folder's README gives the protocol, the
+commands and the results table, empty until the runs are made: the configs were checked on each benchmark's two smoke
+rows only. Every config comes twice, Codex with GPT-5.6-Luna on a ChatGPT login (`*codex*.yaml`) and Claude Code with
+Claude Haiku 5.5 on a Claude subscription (`*claude*.yaml`), both at medium effort, acting and learning.
+
+| Folder | Tasks | Score | Baseline | Method, in its paper's protocol |
+|---|---|---|---|---|
+| [`terminal_bench_2_0/`](terminal_bench_2_0/) | 89 terminal tasks, an hour each | pass@1 of the tasks' tests | the CLI with no adapter, each task twice (rollouts #3 and #4) | [`ahe_adapter`](terminal_bench_2_0/ahe_adapter/): the AHE paper's own on this benchmark, ten iterations over each task twice (#1, #2), tested on #3 and #4 |
+| [`swebench_verified/`](swebench_verified/) | 500 GitHub issues | resolve rate | no adapter, each issue once | nothing trains: Terminal-Bench 2.0's final AHE adapter, frozen, against AHE's seed (the AHE and RRSI papers' transfer test) |
+| [`algotune/`](algotune/) | 154 speedup tasks | harmonic mean of the speedups | no adapter, the 108 test tasks | [`skillopt`](algotune/skillopt/): SkillOpt's split 2:1:7, 4 epochs, its gate, slow update and meta skill |
+| [`terminal_bench_science/`](terminal_bench_science/) | 70 science workflows, 8 hours each | pass@1 | no adapter, each task twice (#3, #4) | Terminal-Bench 2.0's AHE adapter, frozen; [`ahe_adapter`](terminal_bench_science/ahe_adapter/) in Terminal-Bench 2.0's protocol |
+| [`labbench/`](labbench/) | 181 FigQA figure questions | accuracy | no adapter, the 127 test questions | [`skillopt`](labbench/skillopt/), as for AlgoTune |
+
+**What a machine needs.**
+
+- Linux with Docker, which runs every trial in the task's container, and bubblewrap, for the learners' sandbox and for
+  every trial that deploys an adapter (its exports are rendered in the strict adapter sandbox: each `--adapter final`
+  or `root`, a transfer, AHE's seed as a directory); `hermit eval` and `hermit train` refuse to start without it when
+  they deploy one ([Installation](../docs/get-started/installation.md)).
+- Harbor 0.25.0 in a venv of its own, where the configs look for it:
+
+  ```bash
+  uv venv --python 3.13 ~/.cache/hermit/harbor-venv
+  uv pip install --python ~/.cache/hermit/harbor-venv/bin/python harbor==0.25.0
+  ```
+
+- Hermit from this checkout, with SkillOpt's group for its configs: `python -m pip install -e . --group skillopt`.
+- The sign-in of the profile's CLI: `codex login` on a ChatGPT plan for the Codex configs; `claude setup-token`, its
+  token exported as `CLAUDE_CODE_OAUTH_TOKEN`, for the Claude Code configs. Harbor installs the CLI in each task's
+  container; a method run also needs it on this machine, where its learners run. The sign-in reaches the CLI in each
+  task's container (Codex's sign-in file; Claude Code's token by name, in no process's environment), where the
+  session's commands run as the CLI's user and, in these task sets, reach the public network: a command that read it
+  could send it out (`hermit train` and `hermit check` warn of it for Claude Code). Run them on a sign-in you accept
+  that risk for.
+- Room. No trial starts while Docker's disk has less than 25 GB free (the benchmark files' `disk_gate_gb`); a trial's
+  image is built or pulled for it: Terminal-Bench 2.0's prebuilt images from Docker Hub, 120-150 GB in all, each
+  removed after its trials and so pulled again at every AHE step (sign in with `docker login` for Docker Hub's pull
+  limits, or keep them where the disk holds them: [Terminal-Bench 2.0](terminal_bench_2_0/README.md#prepare));
+  SWE-bench's image of the issue, one for each of the 500, which stays in Docker's build cache; AlgoTune's 8 GB, the
+  same layers for every task. An AlgoTune container takes 8 CPUs and up to 64 GB, six at a time. No trial starts
+  either while the host's `/tmp` has less than 1 GB free (`agent.params.tmp_gate_gb`). Each gate holds a trial up to
+  six hours (`disk_gate_wait_s`), one after the other (so up to twelve), then the trial ends infra.
+
+**Run a benchmark** from the repository root:
+
+```bash
+python -m hermit.harbor.dataset prepare examples/<folder>/utils/benchmark.yaml   # once: download, check the lock
+hermit eval  --config examples/<folder>/baseline/codex.yaml --adapter none      # the baseline
+hermit train --config examples/<folder>/<method>/smoke_codex.yaml               # the method on two tasks
+hermit eval  --config examples/<folder>/<method>/smoke_codex.yaml --adapter final
+hermit train --config examples/<folder>/<method>/run_codex.yaml                 # the method
+hermit eval  --config examples/<folder>/<method>/run_codex.yaml --adapter final # its final adapter, tested
+```
+
+The same command run again resumes: a finished trial comes from the profile's trial cache (`jobs_dir`), an infra one
+runs again, and a training run continues after its last step (in the step it stopped in, its finished rollouts come
+from the cache and a method's validation runs, `run_agent`'s, run again). A lost sign-in halts every run on the
+profile's `jobs_dir`: sign in again, remove `<jobs_dir>/HALT` and run the command again; its halted trials run then. A
+plan's usage limit halts nothing on these configs' logins: the trials wait for the plan's window, then run.
+
+**Hand a run to someone.** Each run below is one machine's and shares nothing with the others but its profile's trial
+cache, so each can go to a different person (a method's seed or empty skill, `--adapter root`, goes with the method's
+training: like `final`, it is an adapter of that run's tree; AlgoTune's baseline goes with them too, as its speedups are
+timed on the machine that runs them); it sends back its eval folder,
+`<folder>/<method or baseline>/runs/<run name>/eval/<adapter>/` (`summary.json` and `results.jsonl`, from which Hermit
+removes the values of its key-like variables, a Claude token or an API key, though not a ChatGPT sign-in's tokens, which
+are in its login file: an agent that printed that file would leave them in its reply; the logs' paths name the sender's
+machine), whose numbers go into the README's results table. An AHE run also sends back its best iteration's in-sample
+pass@1, numbers and a commit: `<folder>/ahe_adapter/runs/<run name>/workspace/state/best_ever.json`. The trials are
+those of one profile.
+
+| Folder | Run | Command | Trials | A trial's limit |
+|---|---|---|---|---|
+| `terminal_bench_2_0` | baseline | `hermit eval --config baseline/<p>.yaml --adapter none` | 178 | 1 h |
+| | AHE's seed | `hermit eval --config ahe_adapter/run_<p>.yaml --adapter root`, after AHE's training | 178 | |
+| | AHE | `hermit train --config ahe_adapter/run_<p>.yaml`, then `hermit eval ... --adapter final` | at most 1,780, then 178 | |
+| `swebench_verified` | baseline | `hermit eval --config baseline/<p>.yaml --adapter none` | 500 | 50 min |
+| | AHE's seed | `... --adapter "$PWD/hermit/adapter/templates/ahe"` | 500 | |
+| | transfer | `... --adapter "$PWD/<export>"`, after Terminal-Bench 2.0's AHE run | 500 | |
+| `algotune` | baseline | `hermit eval --config baseline/<p>.yaml --adapter none` | 108 | 1 h, and the timing |
+| | the empty skill | `hermit eval --config skillopt/run_<p>.yaml --adapter root`, after SkillOpt's training | 108 | |
+| | SkillOpt | `hermit train --config skillopt/run_<p>.yaml`, then `hermit eval ... --adapter final` | at most 364 (more if resumed mid-step), then 108 | |
+| `terminal_bench_science` | baseline | `hermit eval --config baseline/<p>.yaml --adapter none` | 140 | 8 h |
+| | AHE's seed | `... --adapter "$PWD/hermit/adapter/templates/ahe"` | 140 | |
+| | transfer | `... --adapter "$PWD/<export>"`, after Terminal-Bench 2.0's AHE run | 140 | |
+| | AHE | `hermit train --config ahe_adapter/run_<p>.yaml`, then `hermit eval ... --adapter final` | at most 1,400, then 140 | |
+| `labbench` | baseline | `hermit eval --config baseline/<p>.yaml --adapter none` | 127 | 5 min |
+| | the empty skill | `hermit eval --config skillopt/run_<p>.yaml --adapter root`, after SkillOpt's training | 127 | |
+| | SkillOpt | `hermit train --config skillopt/run_<p>.yaml`, then `hermit eval ... --adapter final` | at most 408 (more if resumed mid-step), then 127 | |
+
+`<p>` is `codex` or `claude`, and a config is `examples/<folder>/...`. Before a long training, its method's
+`smoke_<p>.yaml` checks the task set, the CLI in the containers and the method's learners together. SWE-bench Verified
+trains nothing and has no smoke config: a baseline config with `data.test=../utils/splits/smoke.txt`,
+`trainer.run_name=<p>-smoke` and `agent.params.jobs_dir=~/.cache/hermit/harbor/jobs/swebv-<p>-smoke` runs its 2 smoke
+tasks apart from the baseline's run and trials, as the methods' smokes run apart from theirs. The transfer runs take
+Terminal-Bench 2.0's final adapter of the same profile as a directory, `<export>`, which whoever ran that training
+writes out (`examples/terminal_bench_2_0/ahe_adapter/runs/ahe-final-<p>`:
+[Terminal-Bench 2.0](terminal_bench_2_0/README.md#ahe-adapter) says how) and hands on. LAB-Bench's runs are also
+reported on its 102 questions with a new figure, from the same trials ([LAB-Bench FigQA](labbench/README.md#prepare)).
+
+**Another model or CLI.** A config's models are its `agent.params.model` (the acting agent), its learners'
+(`evolver.model` for AHE, `llm.model` for SkillOpt) and their `login`s: copy the config, change them, and give the
+copy its own `trainer.run_name` and `tree_dir`. `acting_agent: {cli: ...}` takes another CLI (`codex`, `claude`,
+`pi`, `opencode`, `dsh`, `mini-swe-agent`: [Benchmarks](../docs/framework/task.md#benchmarks)), and a
+`<backend>/<model>` reference with no `login` runs on that backend's key
+([Model backends](../docs/guides/model-backends.md)); these configs were checked on the two logins only.
+
 ## Demos
 
 These show one part of the framework and report no number.
